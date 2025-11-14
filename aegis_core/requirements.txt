@@ -1,0 +1,15 @@
+# Aegis — AI-Powered Code Security Platform
+# Install with: pip install -r requirements.txt
+
+# LLM gateway — supports OpenAI, Gemini, Anthropic, and 100+ other models
+litellm>=1.40.0
+
+# Structured output validation
+pydantic>=2.0.0
+
+# Web server for GitHub webhook integration
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# Async HTTP (used internally by FastAPI)
+httpx>=0.27.0
