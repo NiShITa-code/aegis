@@ -20,6 +20,8 @@ Thumbs.db
 # Logs
 *.log
 
+.aegisignore  # per-project ignore file for Aegis context scanner
+
 # Test artifacts
 .pytest_cache/
 .coverage
