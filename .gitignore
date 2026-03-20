@@ -29,3 +29,9 @@ Thumbs.db
 # Personal documents
 *.docx
 ~$*
+
+# Aegis generated files
+generated_exploit.py
+generated_exploit_validation.py
+*_secure.py
+*_exploit.py
