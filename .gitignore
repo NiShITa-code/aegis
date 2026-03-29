@@ -48,3 +48,6 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Root-level blog drafts (canonical versions in blog/)
+medium_*.md

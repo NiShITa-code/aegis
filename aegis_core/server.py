@@ -48,8 +48,3 @@ if __name__ == "__main__":
     print("Listening on http://0.0.0.0:8000/github-webhook")
     print("=========================================================")
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-# Health endpoint
-@app.get("/health")
-def health_check():
-    return {"status": "Aegis God-Mode is actively listening for commits."}
