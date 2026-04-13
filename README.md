@@ -222,10 +222,9 @@ The core insight driving Aegis is that existing static analysis tools produce to
 ---
 
 ## License
-
-MIT — see [LICENSE](LICENSE).
-
----
+Aegis is licensed under the [Business Source License 1.1](LICENSE).
+Free for personal and open-source use. Commercial use requires a license —
+contact nishita0502@gmail.com.
 
 ## Citation
 
