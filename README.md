@@ -222,9 +222,16 @@ The core insight driving Aegis is that existing static analysis tools produce to
 ---
 
 ## License
-Aegis is licensed under the [Business Source License 1.1](LICENSE).
-Free for personal and open-source use. Commercial use requires a license —
-contact nishita0502@gmail.com.
+
+Aegis is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+
+- Free for personal use, research, and open-source projects
+- Free for companies using it internally (not as a service)
+- If you offer Aegis as a hosted/commercial service, you must either
+  open-source your entire stack (AGPL requirement) or obtain a
+  commercial license
+
+**Commercial licensing:** nishita0502@gmail.com
 
 ## Citation
 
