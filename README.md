@@ -215,8 +215,6 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Background
 
-Aegis was built as part of AI security research at Imperial College London, alongside work on adversarial LLM testing ([QD-Bandit](https://github.com/NiShITa-code/Research_QDBandit)) and a co-authored paper on LLM red-teaming ([Red-Bandit, arXiv:2510.07239](https://arxiv.org/abs/2510.07239)).
-
 The core insight driving Aegis is that existing static analysis tools produce too many false positives, and LLM-based tools that don't verify exploits dynamically can't be trusted. By combining LLM reasoning with sandboxed dynamic execution, Aegis only flags vulnerabilities it can prove are real.
 
 ---
