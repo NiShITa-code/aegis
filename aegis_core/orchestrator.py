@@ -4,6 +4,9 @@ import re
 from agent_red import generate_exploit
 from agent_blue import generate_fix
 from sandbox import run_exploit_against_target
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def create_validation_exploit(original_exploit_path: str, original_target: str, new_target: str) -> str:
     """
@@ -20,50 +23,9 @@ def create_validation_exploit(original_exploit_path: str, original_target: str, 
         new_basename = os.path.basename(new_target)
         modified_code = exploit_code.replace(original_basename, new_basename)
         
-        # Replace subprocess.run with subprocess.run(capture_output=True) and check stdout
-        # This ensures the exploit actually checks if the attack succeeded
-        if 'capture_output' not in modified_code:
-            modified_code = modified_code.replace(
-                'subprocess.run([',
-                'subprocess.run(['
-            )
-        
-        # Wrap the exploit in a smarter harness that checks output
-        wrapper = f'''import subprocess
-import sys
-import os
-
-target = os.environ.get("TARGET_APP", "{new_basename}")
-
-# Run the original exploit logic but capture output
-result = subprocess.run(
-    ["python", target, "admin", "\' OR 1=1 --"],
-    capture_output=True, text=True, timeout=15
-)
-
-stdout = result.stdout.lower()
-stderr = result.stderr.lower()
-combined = stdout + stderr
-
-# Check if the exploit actually succeeded (authenticated, access granted, etc.)
-success_indicators = ["authenticated as", "access granted", "welcome admin", "role admin", "logged in"]
-failure_indicators = ["authentication failed", "access denied", "invalid credentials", "error"]
-
-exploit_succeeded = any(indicator in combined for indicator in success_indicators)
-exploit_blocked = any(indicator in combined for indicator in failure_indicators)
-
-if exploit_succeeded and not exploit_blocked:
-    print("EXPLOIT SUCCESS: Vulnerability still exists")
-    print(result.stdout)
-    sys.exit(0)
-else:
-    print("EXPLOIT BLOCKED: The fix is working")
-    print(result.stdout)
-    sys.exit(1)
-'''
-        
+        # Write the modified exploit script
         with open(validation_exploit_path, 'w') as f:
-            f.write(wrapper)
+            f.write(modified_code)
         
         return validation_exploit_path
     except Exception as e:
@@ -100,6 +62,7 @@ def run_aegis_pipeline(target_file: str):
         
         if is_vulnerable:
             vulnerability_found = True
+            docker_out_proof = docker_out
             break
         else:
             print("❌ Exploit Failed or Sandbox Crashed. Feeding error back to Red Team for Fuzzing...")
@@ -143,13 +106,43 @@ def run_aegis_pipeline(target_file: str):
             print("✅ SUCCESS: The refactored code successfully blocked the zero-day exploit!")
             print(f"✅ The secure refactored code has been saved to: {fixed_app_file}")
             print("==================================================")
+            
+            # Phase 3: Save Report for the Proof Dashboard
+            import json
+            import time
+            from datetime import datetime
+            
+            os.makedirs(".aegis_reports", exist_ok=True)
+            report_id = f"report_{int(time.time())}"
+            report_path = os.path.join(".aegis_reports", f"{report_id}.json")
+            
+            try:
+                with open(target_file, 'r') as f: orig_code = f.read()
+                with open(temp_exploit_file, 'r') as f: exp_code = f.read()
+                with open(fixed_app_file, 'r') as f: fix_code = f.read()
+                
+                report = {
+                    "id": report_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "target_file": os.path.basename(target_file),
+                    "original_code": orig_code,
+                    "exploit_code": exp_code,
+                    "sandbox_output": docker_out_proof,
+                    "patched_code": fix_code
+                }
+                with open(report_path, 'w') as f:
+                    json.dump(report, f, indent=2)
+                print(f"[Aegis] 📊 Report saved to {report_path}")
+            except Exception as e:
+                print(f"[Aegis] Failed to save report: {e}")
+                
             break
 
 
 if __name__ == "__main__":
-    if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("GEMINI_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
+    if not any([os.environ.get(k) for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY"]]):
         print("⚠️  WARNING: You don't seem to have an API key set in your environment.")
-        print("Aegis requires an LLM to run. Please set GEMINI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY before running.")
+        print("Aegis requires an LLM to run. Please set GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY before running.")
     
     # Defaulting to testing the vuln_app
     app_to_test = "vuln_app.py" if len(sys.argv) < 2 else sys.argv[1]

@@ -1,6 +1,7 @@
 import subprocess
 import os
-
+import shutil
+import tempfile
 from typing import Tuple
 
 def run_exploit_against_target(exploit_path: str, target_app_path: str) -> Tuple[bool, str]:
@@ -10,20 +11,36 @@ def run_exploit_against_target(exploit_path: str, target_app_path: str) -> Tuple
     """
     print(f"\n[Aegis - Sandbox Judge] 🐳 Spinning up secure Docker container to run exploit...")
     
-    # We must use absolute paths for Docker volume mounting
-    cwd = os.path.abspath(os.getcwd())
+    # Create isolated per-scan temp workspace
+    temp_workspace = tempfile.mkdtemp(prefix="aegis_sandbox_")
+    
+    # Copy only necessary files
+    safe_target_path = os.path.join(temp_workspace, os.path.basename(target_app_path))
+    safe_exploit_path = os.path.join(temp_workspace, os.path.basename(exploit_path))
+    
+    try:
+        shutil.copy2(target_app_path, safe_target_path)
+        shutil.copy2(exploit_path, safe_exploit_path)
+    except Exception as e:
+        shutil.rmtree(temp_workspace, ignore_errors=True)
+        return False, f"Failed to setup sandbox workspace: {e}"
     
     # Dynamic Docker Image Routing
     ext = os.path.splitext(target_app_path)[1].lower()
     if ext in ['.js', '.ts']:
         docker_image = "nikolaik/python-nodejs:python3.10-nodejs20"
+    elif ext == '.go':
+        docker_image = "golang:1.21-bullseye"
     else:
         docker_image = "python:3.10-slim"
         
     docker_cmd = [
         "docker", "run", "--rm",
         "--network", "none", # Total network isolation for safety
-        "-v", f"{cwd}:/app",
+        "--memory=512m",     # Resource limits
+        "--cpus=1.0",
+        "--pids-limit=50",
+        "-v", f"{temp_workspace}:/app", # Mount ONLY the temp workspace
         "-w", "/app",
         "-e", f"TARGET_APP={os.path.basename(target_app_path)}",
         docker_image,
@@ -44,6 +61,11 @@ def run_exploit_against_target(exploit_path: str, target_app_path: str) -> Tuple
         print(result.stderr.strip())
         print("-------------")
         
+        if result.returncode != 0 and ("error during connect" in result.stderr or "Cannot connect to the Docker daemon" in result.stderr):
+            print("[Aegis - Sandbox Judge] ⚠️ WARNING: Docker daemon is not running!")
+            print("[Aegis - Sandbox Judge] FATAL: Secure Sandbox Unavailable. Aborting to prevent host execution.")
+            return False, "Docker daemon unavailable."
+            
         if result.returncode == 0:
             print("[Aegis - Sandbox Judge] 🔴 VULNERABILITY CONFIRMED: The exploit was successful in Docker.")
             return True, result.stdout.strip() + "\n" + result.stderr.strip()
@@ -56,19 +78,11 @@ def run_exploit_against_target(exploit_path: str, target_app_path: str) -> Tuple
         return False, "Execution timed out."
     except FileNotFoundError:
         print("[Aegis - Sandbox Judge] ⚠️ WARNING: Docker is not installed or not running on this machine!")
-        print("[Aegis - Sandbox Judge] Falling back to INSECURE local execution...")
-        # Fallback for systems without docker 
-        return run_exploit_local_fallback(exploit_path, target_app_path)
+        print("[Aegis - Sandbox Judge] FATAL: Secure Sandbox Unavailable. Aborting to prevent host execution.")
+        return False, "Docker not installed."
     except Exception as e:
         print(f"[Aegis - Sandbox Judge] Error running Docker sandbox: {e}")
         return False, str(e)
-
-def run_exploit_local_fallback(exploit_path: str, target_app_path: str) -> Tuple[bool, str]:
-    """Fallback if docker isn't installed. Unsafe!"""
-    env = os.environ.copy()
-    env["TARGET_APP"] = target_app_path
-    try:
-        result = subprocess.run(["python", exploit_path], env=env, capture_output=True, text=True, timeout=10)
-        return result.returncode == 0, result.stdout.strip() + "\n" + result.stderr.strip()
-    except Exception as e:
-        return False, str(e)
+    finally:
+        # Cleanup isolated workspace
+        shutil.rmtree(temp_workspace, ignore_errors=True)

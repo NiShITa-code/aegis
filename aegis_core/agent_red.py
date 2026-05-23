@@ -44,13 +44,25 @@ def generate_exploit(target_code_path: str, output_exploit_path: str, previous_e
     # Load the entire architectural context
     enterprise_context = load_codebase_context(target_code_path=target_code_path)
 
+    # Determine language-specific instructions
+    ext = os.path.splitext(target_code_path)[1].lower()
+    if ext in ['.js', '.ts']:
+        lang_name = "Node.js/JavaScript"
+        run_cmd = "node"
+    elif ext == '.go':
+        lang_name = "Go"
+        run_cmd = "go run"
+    else:
+        lang_name = "Python"
+        run_cmd = "python"
+
     prompt = f"""You are an elite offensive security researcher (Red Team).
-    Analyze the following Python application within the context of the entire enterprise architecture,
+    Analyze the following {lang_name} application within the context of the entire enterprise architecture,
     and identify any critical vulnerabilities.
     
     RULES:
-    1. The exploit script MUST read the target filename from the TARGET_APP environment variable: `target = os.environ.get("TARGET_APP", "vuln_app.py")`
-    2. The exploit script MUST execute the target application using `subprocess` and pass the malicious payload as arguments.
+    1. The exploit script MUST read the target filename from the TARGET_APP environment variable: `target = os.environ.get("TARGET_APP", "{os.path.basename(target_code_path)}")`
+    2. The exploit script MUST execute the target application using `subprocess` with the correct runtime (i.e. `subprocess.run(["{run_cmd}", target, ...])`) and pass the malicious payload as arguments.
     3. If the target application is a web server or API, your exploit script MUST start the server in a background thread, wait for it to initialize, and then execute HTTP requests against it to exploit the vulnerability.
     4. The exploit script MUST exit with code 0 if the exploit is SUCCESSFUL.
     5. The exploit script MUST exit with code 1 if the exploit FAILS.
