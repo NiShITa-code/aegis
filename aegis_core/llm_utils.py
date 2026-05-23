@@ -37,6 +37,17 @@ def extract_json_from_text(raw_text: str) -> dict:
                 pass
     raise ValueError("Could not extract valid JSON from LLM response.")
 
+# Telemetry
+LLM_TELEMETRY = {
+    "total_calls": 0,
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0
+}
+
+def get_llm_telemetry() -> dict:
+    return LLM_TELEMETRY
+
 # We retry on transient errors (rate limit, timeout) and validation errors.
 # We stop after 3 attempts.
 @retry(
@@ -63,12 +74,20 @@ def call_llm_with_retries(messages: list, response_format: type[BaseModel]) -> B
     # Note: Determinism is not a security boundary, but setting temperature=0.0
     # ensures consistent, predictable output for security-critical generation.
     try:
+        LLM_TELEMETRY["total_calls"] += 1
         response = completion(
             model=model,
             messages=messages,
             temperature=0.0,
             response_format=response_format
         )
+        
+        # Track token usage
+        if hasattr(response, 'usage') and response.usage:
+            LLM_TELEMETRY["prompt_tokens"] += getattr(response.usage, 'prompt_tokens', 0)
+            LLM_TELEMETRY["completion_tokens"] += getattr(response.usage, 'completion_tokens', 0)
+            LLM_TELEMETRY["total_tokens"] += getattr(response.usage, 'total_tokens', 0)
+            
     except litellm.exceptions.RateLimitError as e:
         print("[Aegis - LLM] Rate limit hit. Backing off...")
         raise e

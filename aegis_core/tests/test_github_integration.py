@@ -8,17 +8,21 @@ from github_utils import get_github_token, apply_patch
 from idempotency import SQLiteIdempotencyStore
 
 def test_github_token_fallback_blocked_in_production(monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "fake_pat")
-    monkeypatch.setenv("AEGIS_ENV", "production")
-    monkeypatch.delenv("AEGIS_ALLOW_PAT_FALLBACK", raising=False)
-    monkeypatch.delenv("GITHUB_APP_ID", raising=False)
+    import app_config
+    monkeypatch.setattr(app_config.settings, 'aegis_env', 'production')
+    monkeypatch.setattr(app_config.settings, 'github_app_id', None)
+    monkeypatch.setattr(app_config.settings, 'github_app_private_key', None)
     
     token = get_github_token("owner/repo")
     assert token == "" # Fallback is blocked
 
 def test_github_token_fallback_allowed_in_dev(monkeypatch):
-    monkeypatch.setenv("GITHUB_TOKEN", "fake_pat")
-    monkeypatch.setenv("AEGIS_ENV", "development")
+    import app_config
+    from pydantic import SecretStr
+    monkeypatch.setattr(app_config.settings, 'aegis_env', 'development')
+    monkeypatch.setattr(app_config.settings, 'github_app_id', None)
+    monkeypatch.setattr(app_config.settings, 'github_app_private_key', None)
+    monkeypatch.setattr(app_config.settings, 'github_token', SecretStr('fake_pat'))
     
     token = get_github_token("owner/repo")
     assert token == "fake_pat"

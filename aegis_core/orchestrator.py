@@ -66,6 +66,7 @@ def is_duplicate_finding(target_file: str, cwe_id: str) -> bool:
     return False
 
 def run_aegis_pipeline(target_file: str):
+    start_time = time.time()
     print("==================================================")
     print("🛡️ WELCOME TO AEGIS: THE GOD-MODE AI APPSEC PLATFORM 🛡️")
     print("==================================================")
@@ -165,7 +166,7 @@ def run_aegis_pipeline(target_file: str):
                 previous_error = docker_out
             else:
                 print("❌ FATAL: Aegis exhausted all attempts to fix the codebase.")
-                sys.exit(1)
+                break
         else:
             print("✅ SUCCESS: The refactored code successfully blocked the zero-day exploit!")
             
@@ -202,55 +203,74 @@ def run_aegis_pipeline(target_file: str):
                             print("❌ FATAL: Aegis exhausted all attempts to fix the codebase without breaking tests.")
                             shutil.copy(backup_file, target_file)
                             os.remove(backup_file)
-                            sys.exit(1)
+                            break
                 finally:
                     if os.path.exists(backup_file):
                         shutil.copy(backup_file, target_file)
                         os.remove(backup_file)
             
+            # Always generate an orchestrator artifact
+            artifact = {
+                "target_file": os.path.basename(target_file),
+                "status": final_status,
+                "sandbox_output": docker_out_proof,
+                "original_code": orig_code,
+                "exploit_code": exp_code,
+                "patched_code": fix_code,
+                "functional_test_result": "PASSED" if final_status == STATUS_SECURED else ("FAILED" if final_status == STATUS_FAILED_FUNCTIONAL_TESTS else "NONE"),
+                "llm_calls": current_llm_calls,
+                "token_usage": getattr(sys.modules.get('llm_utils'), 'LLM_TELEMETRY', {}),
+                "duration_seconds": time.time() - start_time
+            }
+            
+            output_json_path = os.environ.get("AEGIS_ORCHESTRATOR_OUTPUT_JSON")
+            if output_json_path:
+                # Atomic write
+                tmp_path = output_json_path + ".tmp"
+                with open(tmp_path, 'w') as f:
+                    json.dump(artifact, f, indent=2)
+                os.replace(tmp_path, output_json_path)
+            
             print(f"✅ The secure refactored code has been saved to: {fixed_app_file}")
-            
-            os.makedirs(".aegis_reports", exist_ok=True)
-            report_id = f"report_{int(time.time())}"
-            report_path = os.path.join(".aegis_reports", f"{report_id}.json")
-            
-            try:
-                with open(target_file, 'r') as f: orig_code = f.read()
-                with open(temp_exploit_file, 'r') as f: exp_code = f.read()
-                with open(fixed_app_file, 'r') as f: fix_code = f.read()
-                
-                report = {
-                    "id": report_id,
-                    "timestamp": datetime.now().isoformat(),
-                    "target_file": os.path.basename(target_file),
-                    "original_code": orig_code,
-                    "exploit_code": exp_code,
-                    "sandbox_output": docker_out_proof,
-                    "patched_code": fix_code,
-                    "status": final_status
-                }
-                with open(report_path, 'w') as f:
-                    json.dump(report, f, indent=2)
-                print(f"[Aegis] 📊 Report saved to {report_path}")
-            except Exception as e:
-                print(f"[Aegis] Failed to save report: {e}")
-                
             break
             
-    # If the loop exhausted without finding a successful fix (rare because of sys.exit(1), but just in case)
+    # If the loop exhausted without finding a successful fix
     if attempt >= max_retries and 'final_status' not in locals():
+        output_json_path = os.environ.get("AEGIS_ORCHESTRATOR_OUTPUT_JSON")
+        if output_json_path:
+            artifact = {
+                "target_file": os.path.basename(target_file),
+                "status": previous_error_status if 'previous_error_status' in locals() else STATUS_LLM_FAILURE,
+                "sandbox_output": previous_error if previous_error else "",
+                "original_code": "", "exploit_code": "", "patched_code": "",
+                "functional_test_result": "NONE",
+                "llm_calls": current_llm_calls,
+                "token_usage": getattr(sys.modules.get('llm_utils'), 'LLM_TELEMETRY', {}),
+                "duration_seconds": time.time() - start_time
+            }
+            tmp_path = output_json_path + ".tmp"
+            with open(tmp_path, 'w') as f:
+                json.dump(artifact, f, indent=2)
+            os.replace(tmp_path, output_json_path)
         sys.exit(1)
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("target_file", help="The python file to scan")
+    parser.add_argument("--output-json", help="Path to write the intermediate artifact JSON")
+    args = parser.parse_args()
+    
+    if args.output_json:
+        os.environ["AEGIS_ORCHESTRATOR_OUTPUT_JSON"] = args.output_json
+        
     if not any([os.environ.get(k) for k in ["OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY"]]):
         print("⚠️  WARNING: You don't seem to have an API key set in your environment.")
         print("Aegis requires an LLM to run. Please set GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY before running.")
     
-    app_to_test = "vuln_app.py" if len(sys.argv) < 2 else sys.argv[1]
-    
-    if not os.path.exists(app_to_test):
-        print(f"Error: Target file {app_to_test} not found.")
+    if not os.path.exists(args.target_file):
+        print(f"Error: Target file {args.target_file} not found.")
         sys.exit(1)
         
-    run_aegis_pipeline(app_to_test)
+    run_aegis_pipeline(args.target_file)
