@@ -1,35 +1,18 @@
 import os
-import json
-import re
-from litellm import completion
 from pydantic import BaseModel, Field
+from llm_utils import safe_call_llm
 
 class RemediationPayload(BaseModel):
+    # Confidence is provided but determinism/proof depends strictly on orchestrator
     confidence_score: int = Field(description="Confidence from 1-100 that this code mathematically patches the vulnerability.")
     explanation: str = Field(description="A 1-sentence explanation of what was changed.")
-    secure_code: str = Field(description="The raw, entirely refactored Python code.")
+    secure_code: str = Field(description="The raw, entirely refactored application code.")
 
-def extract_json_from_text(raw_text: str) -> dict:
-    try:
-        return json.loads(raw_text)
-    except json.JSONDecodeError:
-        match = re.search(r'```(?:json)?\n(.*?)\n```', raw_text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                pass
-        start = raw_text.find('{')
-        end = raw_text.rfind('}')
-        if start != -1 and end != -1:
-            try:
-                return json.loads(raw_text[start:end+1])
-            except:
-                pass
-    raise ValueError("Could not extract valid JSON from LLM response.")
-
-def generate_fix(target_code_path: str, exploit_path: str, output_fixed_path: str, previous_error: str = None) -> bool:
-    """Reads vulnerable code and exploit, uses an LLM to generate secure code via Structured JSON."""
+def generate_fix(target_code_path: str, exploit_path: str, output_fixed_path: str, previous_error: str = None):
+    """
+    Reads vulnerable code and exploit, uses an LLM to generate secure code via Structured JSON.
+    Returns (success_bool, status_code).
+    """
     print("[Aegis - Blue Team Agent] Formulating a secure patch with strict schema adherence...")
     
     try:
@@ -40,7 +23,7 @@ def generate_fix(target_code_path: str, exploit_path: str, output_fixed_path: st
             exploit_code = f.read()
     except Exception as e:
         print(f"[Aegis - Blue Team Agent] Could not read files: {e}")
-        return False
+        return False, "READ_ERROR"
 
     prompt = f"""You are an elite defensive security engineer (Blue Team).
     A Red Team agent has exploited the application using the provided exploit script.
@@ -52,47 +35,39 @@ def generate_fix(target_code_path: str, exploit_path: str, output_fixed_path: st
     --- RED TEAM EXPLOIT SCRIPT USED ---
     {exploit_code}
     """
-
     
     if previous_error:
-        prompt += f"\n    --- FEEDBACK ON PREVIOUS PATCH ---\n    Your previous patch FAILED. The sandbox was still exploited. Docker Output:\n    {previous_error}\n    Fix the flaws in your logic and try completely replacing it.\n"
+        prompt += f"\n    --- FEEDBACK ON PREVIOUS PATCH ---\n    Your previous patch FAILED. The sandbox was still exploited, or functional tests broke. Docker/Test Output:\n    {previous_error}\n    Fix the flaws in your logic and try completely replacing it.\n"
 
+    messages = [
+        {"role": "system", "content": "You are a cybersecurity tool that outputs ONLY valid JSON matching the schema."},
+        {"role": "user", "content": prompt}
+    ]
+
+    data, status_code = safe_call_llm(messages, RemediationPayload)
+    
+    if status_code != "SUCCESS" or not data:
+        print(f"[Aegis - Blue Team Agent] Failed to generate fix. Status: {status_code}")
+        return False, status_code
+        
+    print(f"[Aegis - Blue Team Agent] 🛠️ Fix Plan: {data.explanation}")
+    print(f"[Aegis - Blue Team Agent] 📈 Confidence Score: {data.confidence_score}/100 (Note: Aegis does not trust confidence as proof. Verifying...)")
+    
+    safe_code = data.secure_code.strip()
+    
+    if not safe_code:
+        print("[Aegis - Blue Team Agent] Error: Generated secure code is empty.")
+        return False, "EMPTY_PATCH"
+        
     try:
-        model = os.environ.get("AEGIS_MODEL", "gemini/gemini-1.5-pro")
-        
-        for attempt in range(2):
-            try:
-                response = completion(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "You are a cybersecurity tool that outputs ONLY valid JSON matching the schema."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    response_format=RemediationPayload
-                )
-                
-                raw_json = response.choices[0].message.content
-                data = extract_json_from_text(raw_json)
-                break # successfully parsed
-            except Exception as parse_e:
-                if attempt == 1:
-                    raise parse_e
-                print("[Aegis - Blue Team Agent] JSON parse failed. Retrying...")
-        
-        print(f"[Aegis - Blue Team Agent] 🛠️ Fix Plan: {data.get('explanation')}")
-        print(f"[Aegis - Blue Team Agent] 📈 Confidence Score: {data.get('confidence_score')}/100")
-        
-        safe_code = data.get('secure_code', '').strip()
-            
         with open(output_fixed_path, 'w') as f:
             f.write(safe_code)
-            
-            
-        print(f"[Aegis - Blue Team Agent] 🛡️ Secure refactoring complete! Saved to {output_fixed_path}.")
-        return True
     except Exception as e:
-        print(f"[Aegis - Blue Team Agent] Error generating fix: {e}")
-        return False
+        print(f"[Aegis - Blue Team Agent] Could not write secure code: {e}")
+        return False, "WRITE_ERROR"
+        
+    print(f"[Aegis - Blue Team Agent] 🛡️ Secure refactoring complete! Saved to {output_fixed_path}.")
+    return True, "SUCCESS"
 
 if __name__ == "__main__":
     import sys

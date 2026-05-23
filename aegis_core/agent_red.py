@@ -1,9 +1,7 @@
 import os
-import json
-import re
-from litellm import completion
 from pydantic import BaseModel, Field
 from context_loader import load_codebase_context
+from llm_utils import safe_call_llm
 
 class ExploitPayload(BaseModel):
     cve_type: str = Field(description="The type of vulnerability found (e.g. SQL Injection, Command Injection)")
@@ -11,27 +9,11 @@ class ExploitPayload(BaseModel):
     severity: str = Field(description="Severity (CRITICAL, HIGH, MEDIUM, LOW)")
     exploit_code: str = Field(description="The raw Python code to run the exploit.")
 
-def extract_json_from_text(raw_text: str) -> dict:
-    try:
-        return json.loads(raw_text)
-    except json.JSONDecodeError:
-        match = re.search(r'```(?:json)?\n(.*?)\n```', raw_text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                pass
-        start = raw_text.find('{')
-        end = raw_text.rfind('}')
-        if start != -1 and end != -1:
-            try:
-                return json.loads(raw_text[start:end+1])
-            except:
-                pass
-    raise ValueError("Could not extract valid JSON from LLM response.")
-
-def generate_exploit(target_code_path: str, output_exploit_path: str, previous_error: str = None) -> bool:
-    """Reads target code and uses an LLM with Structured Outputs to generate an exploit script."""
+def generate_exploit(target_code_path: str, output_exploit_path: str, previous_error: str = None):
+    """
+    Reads target code and uses an LLM with Structured Outputs to generate an exploit script.
+    Returns (success_bool, status_code).
+    """
     print("[Aegis - Red Team Agent] Analyzing target code strictly...")
     
     try:
@@ -39,12 +21,10 @@ def generate_exploit(target_code_path: str, output_exploit_path: str, previous_e
             target_code = f.read()
     except Exception as e:
         print(f"[Aegis - Red Team Agent] Could not read target code: {e}")
-        return False
+        return False, "TARGET_READ_ERROR"
 
-    # Load the entire architectural context
     enterprise_context = load_codebase_context(target_code_path=target_code_path)
 
-    # Determine language-specific instructions
     ext = os.path.splitext(target_code_path)[1].lower()
     if ext in ['.js', '.ts']:
         lang_name = "Node.js/JavaScript"
@@ -77,40 +57,40 @@ def generate_exploit(target_code_path: str, output_exploit_path: str, previous_e
     if previous_error:
         prompt += f"\n    --- FEEDBACK ON PREVIOUS EXPLOIT ---\n    Your previous exploit script crashed or failed to cleanly exploit the target. Docker Output:\n    {previous_error}\n    Rewrite your payload to fix the errors and try again.\n"
 
+    messages = [
+        {"role": "system", "content": "You are a cybersecurity tool that outputs ONLY valid JSON matching the schema."},
+        {"role": "user", "content": prompt}
+    ]
+
+    data, status_code = safe_call_llm(messages, ExploitPayload)
+    
+    if status_code != "SUCCESS" or not data:
+        print(f"[Aegis - Red Team Agent] Failed to generate exploit. Status: {status_code}")
+        return False, status_code
+        
+    print(f"[Aegis - Red Team Agent] 🕵️ Vulnerability Found: {data.cwe_id} - {data.cve_type} ({data.severity})")
+    
+    exploit_code = data.exploit_code.strip()
+    
+    if not exploit_code:
+        print("[Aegis - Red Team Agent] Error: Generated exploit code is empty.")
+        return False, "EMPTY_PATCH"
+        
     try:
-        model = os.environ.get("AEGIS_MODEL", "gemini/gemini-1.5-pro")
-        
-        for attempt in range(2):
-            try:
-                response = completion(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "You are a cybersecurity tool that outputs ONLY valid JSON matching the schema."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    response_format=ExploitPayload
-                )
-                
-                raw_json = response.choices[0].message.content
-                data = extract_json_from_text(raw_json)
-                break
-            except Exception as parse_e:
-                if attempt == 1:
-                    raise parse_e
-                print("[Aegis - Red Team Agent] JSON parse failed. Retrying...")
-                
-        print(f"[Aegis - Red Team Agent] 🕵️ Vulnerability Found: {data.get('cwe_id')} - {data.get('cve_type')} ({data.get('severity')})")
-        
-        exploit_code = data.get('exploit_code', '').strip()
-            
         with open(output_exploit_path, 'w') as f:
             f.write(exploit_code)
-            
-        print(f"[Aegis - Red Team Agent] 🎯 Structured exploit generated and saved to {output_exploit_path}.")
-        return True
     except Exception as e:
-        print(f"[Aegis - Red Team Agent] Error generating exploit. Ensure API keys are set. Error: {e}")
-        return False
+        print(f"[Aegis - Red Team Agent] Could not write exploit: {e}")
+        return False, "WRITE_ERROR"
+        
+    print(f"[Aegis - Red Team Agent] 🎯 Structured exploit generated and saved to {output_exploit_path}.")
+    
+    # Return True, status_code, and findings metadata for deduplication
+    metadata = {
+        "cwe_id": data.cwe_id,
+        "cve_type": data.cve_type
+    }
+    return True, metadata
 
 if __name__ == "__main__":
     import sys

@@ -30,7 +30,7 @@ def test_destructive_patch_is_rejected(tmp_path):
          patch('orchestrator.generate_fix') as mock_gen_fix:
          
         # Red Team successfully generates exploit
-        mock_gen_exp.return_value = True
+        mock_gen_exp.return_value = (True, {"cwe_id": "CWE-test", "cve_type": "Test"})
         with open("generated_exploit.py", "w") as f: f.write("")
         
         # Phase 2: Sandbox says YES it's vulnerable on first try
@@ -39,7 +39,7 @@ def test_destructive_patch_is_rejected(tmp_path):
         mock_run_exp.side_effect = [(True, "Vulnerable!"), (False, "Secured!"), (False, "Secured!"), (False, "Secured!")]
         
         # Blue Team successfully generates a fix
-        mock_gen_fix.return_value = True
+        mock_gen_fix.return_value = (True, "SUCCESS")
         with open("dummy_target_secure.py", "w") as f: f.write("import sys; sys.exit(0)")
 
         # It should try 3 times and then sys.exit(1) because tests always fail

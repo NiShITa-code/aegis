@@ -21,3 +21,4 @@ python-dotenv>=1.0.0
 pyyaml>=1.0.0
 cryptography>=41.0.0
 PyJWT>=2.8.0
+tenacity>=8.2.0
