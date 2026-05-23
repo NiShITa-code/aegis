@@ -104,6 +104,60 @@ def run_aegis_pipeline(target_file: str):
                 sys.exit(1)
         else:
             print("✅ SUCCESS: The refactored code successfully blocked the zero-day exploit!")
+            
+            # --- FUNCTIONAL TEST VALIDATION ---
+            from config import get_functional_test_command
+            import subprocess
+            import shutil
+            
+            cwd = os.getcwd()
+            test_cmd = get_functional_test_command(cwd)
+            
+            if not test_cmd:
+                print("⚠️ WARNING: No functional test command found (e.g., pytest, npm test).")
+                print("✅ RESULT: SECURITY_VERIFIED_BUT_FUNCTIONALLY_UNVERIFIED")
+                final_status = "SECURITY_VERIFIED_BUT_FUNCTIONALLY_UNVERIFIED"
+            else:
+                print(f"🧪 Running Functional Tests: {test_cmd}")
+                
+                # Temporarily replace original target with the fixed version for tests
+                backup_file = target_file + ".bak"
+                shutil.copy(target_file, backup_file)
+                shutil.copy(fixed_app_file, target_file)
+                
+                try:
+                    test_result = subprocess.run(
+                        test_cmd, shell=True, capture_output=True, text=True, cwd=cwd
+                    )
+                    
+                    if test_result.returncode == 0:
+                        print("✅ SUCCESS: Functional tests passed! Patch is secure and functional.")
+                        print("✅ RESULT: SECURED")
+                        final_status = "SECURED"
+                    else:
+                        print("❌ FAIL: Functional tests FAILED after applying patch.")
+                        print("The patch likely broke business logic (e.g., destructive sys.exit()).")
+                        print("Test Output:\n" + test_result.stdout + "\n" + test_result.stderr)
+                        
+                        if attempt < max_retries:
+                            print("Looping back to Phase 3 for self-healing...")
+                            previous_error = f"Your patch blocked the exploit, but BROKE the functional tests.\nTest Error Output:\n{test_result.stdout}\n{test_result.stderr}\nYou must fix the vulnerability WITHOUT breaking the existing tests!"
+                            
+                            # Restore original file
+                            shutil.copy(backup_file, target_file)
+                            os.remove(backup_file)
+                            continue
+                        else:
+                            print("❌ FATAL: Aegis exhausted all attempts to fix the codebase without breaking tests.")
+                            shutil.copy(backup_file, target_file)
+                            os.remove(backup_file)
+                            sys.exit(1)
+                finally:
+                    # Ensure original is restored
+                    if os.path.exists(backup_file):
+                        shutil.copy(backup_file, target_file)
+                        os.remove(backup_file)
+            
             print(f"✅ The secure refactored code has been saved to: {fixed_app_file}")
             print("==================================================")
             
@@ -128,7 +182,8 @@ def run_aegis_pipeline(target_file: str):
                     "original_code": orig_code,
                     "exploit_code": exp_code,
                     "sandbox_output": docker_out_proof,
-                    "patched_code": fix_code
+                    "patched_code": fix_code,
+                    "status": final_status
                 }
                 with open(report_path, 'w') as f:
                     json.dump(report, f, indent=2)

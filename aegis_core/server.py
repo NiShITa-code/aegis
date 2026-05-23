@@ -96,13 +96,16 @@ def process_pr_async(repo_full_name: str, pr_number: int):
                 print("--- Error ---")
                 print(result.stderr)
             
-            secure_file_path = target_file.replace(".py", "_secure.py")
-            if os.path.exists(secure_file_path):
-                # Copy the secure file back over the original so we can commit it
-                shutil.copy(secure_file_path, target_file)
-                # Get relative path for git commits
-                rel_file_path = os.path.relpath(target_file, temp_dir)
-                fixed_files.append(rel_file_path)
+            if result.returncode == 0:
+                secure_file_path = target_file.replace(".py", "_secure.py")
+                if os.path.exists(secure_file_path):
+                    # Copy the secure file back over the original so we can commit it
+                    shutil.copy(secure_file_path, target_file)
+                    # Get relative path for git commits
+                    rel_file_path = os.path.relpath(target_file, temp_dir)
+                    fixed_files.append(rel_file_path)
+            else:
+                print(f"[Aegis - CI/CD] Orchestrator failed to secure {target_file}. Skipping commit.")
                 
         except Exception as e:
             print(f"[Aegis - CI/CD] Error running orchestrator on {target_file}: {e}")
