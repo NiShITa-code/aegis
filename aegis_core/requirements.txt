@@ -19,3 +19,5 @@ semgrep>=1.60.0
 PyGithub>=2.0.0
 python-dotenv>=1.0.0
 pyyaml>=1.0.0
+cryptography>=41.0.0
+PyJWT>=2.8.0

@@ -10,7 +10,8 @@ from dotenv import load_dotenv
 
 # Local imports
 from sast_scanner import run_semgrep
-from github_utils import clone_pr_branch, post_pr_comment, create_commit_on_pr
+from github_utils import clone_pr_branch, post_pr_comment, apply_patch
+from idempotency import store
 
 load_dotenv()
 
@@ -31,11 +32,9 @@ app.add_middleware(
 @app.get("/api/reports")
 def get_reports():
     reports_dir = ".aegis_reports"
-    # Also check parent dir since server might be run from inside aegis_core
     if not os.path.exists(reports_dir):
         reports_dir = os.path.join("..", ".aegis_reports")
         if not os.path.exists(reports_dir):
-            # Fallback to local
             reports_dir = ".aegis_reports"
             os.makedirs(reports_dir, exist_ok=True)
         
@@ -46,17 +45,12 @@ def get_reports():
                 reports.append(json.load(f))
         except Exception:
             pass
-    # Sort by timestamp descending
     reports.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return {"reports": reports}
 
 def process_pr_async(repo_full_name: str, pr_number: int):
-    """
-    Background task to run the full Aegis god-mode pipeline on a PR.
-    """
     print(f"\n[Aegis - CI/CD] Starting async pipeline for PR #{pr_number} in {repo_full_name}")
     
-    # 1. Clone PR branch
     temp_dir = tempfile.mkdtemp(prefix="aegis_")
     success = clone_pr_branch(repo_full_name, pr_number, temp_dir)
     if not success:
@@ -64,7 +58,6 @@ def process_pr_async(repo_full_name: str, pr_number: int):
         shutil.rmtree(temp_dir, ignore_errors=True)
         return
 
-    # 2. Run Hybrid Discovery (SAST)
     vulnerable_files = run_semgrep(temp_dir)
     
     if not vulnerable_files:
@@ -73,14 +66,11 @@ def process_pr_async(repo_full_name: str, pr_number: int):
         shutil.rmtree(temp_dir, ignore_errors=True)
         return
 
-    # 3. Targeted Red/Blue Team execution
     fixed_files = []
     
     for target_file in vulnerable_files:
         print(f"\n[Aegis - CI/CD] Engaging God-Mode on flagged file: {target_file}")
         try:
-            # We run orchestrator as a subprocess because it uses sys.exit()
-            # which would kill our entire background worker thread.
             orchestrator_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "orchestrator.py"))
             
             result = subprocess.run(
@@ -89,7 +79,6 @@ def process_pr_async(repo_full_name: str, pr_number: int):
                 text=True
             )
             
-            # Write the orchestrator logs so developers can debug
             print(f"--- Orchestrator Output for {os.path.basename(target_file)} ---")
             print(result.stdout)
             if result.stderr:
@@ -99,9 +88,7 @@ def process_pr_async(repo_full_name: str, pr_number: int):
             if result.returncode == 0:
                 secure_file_path = target_file.replace(".py", "_secure.py")
                 if os.path.exists(secure_file_path):
-                    # Copy the secure file back over the original so we can commit it
                     shutil.copy(secure_file_path, target_file)
-                    # Get relative path for git commits
                     rel_file_path = os.path.relpath(target_file, temp_dir)
                     fixed_files.append(rel_file_path)
             else:
@@ -110,16 +97,10 @@ def process_pr_async(repo_full_name: str, pr_number: int):
         except Exception as e:
             print(f"[Aegis - CI/CD] Error running orchestrator on {target_file}: {e}")
 
-    # 4. Commit patches back to PR
     if fixed_files:
-        for f in fixed_files:
-            create_commit_on_pr(temp_dir, f, f"🛡️ Aegis God-Mode: Secured {f}")
-        
-        post_pr_comment(
-            repo_full_name, 
-            pr_number, 
-            f"🛡️ **Aegis God-Mode Analysis:** Found and verified vulnerabilities in {len(fixed_files)} files. Secure patches have been automatically committed."
-        )
+        success = apply_patch(temp_dir, fixed_files, "🛡️ Aegis God-Mode: Secured vulnerabilities", repo_full_name, pr_number)
+        if not success:
+            print("[Aegis - CI/CD] Failed to push or create PR for the patch.")
     else:
         post_pr_comment(
             repo_full_name, 
@@ -127,16 +108,16 @@ def process_pr_async(repo_full_name: str, pr_number: int):
             "🛡️ **Aegis God-Mode Analysis:** Vulnerabilities flagged by SAST could not be verified by the Sandbox. No fixes required."
         )
 
-    # Cleanup
     shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @app.post("/github-webhook")
-async def github_webhook(request: Request, background_tasks: BackgroundTasks, x_hub_signature_256: str = Header(None)):
-    """
-    Listens for GitHub Pull Request events.
-    When a PR is opened, it automatically triggers the multi-agent AI pipeline.
-    """
+async def github_webhook(
+    request: Request, 
+    background_tasks: BackgroundTasks, 
+    x_hub_signature_256: str = Header(None),
+    x_github_delivery: str = Header(None)
+):
     secret = os.environ.get("GITHUB_SECRET")
     if secret:
         if not x_hub_signature_256:
@@ -147,6 +128,9 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks, x_
         
         if not hmac.compare_digest(signature, x_hub_signature_256):
             raise HTTPException(status_code=401, detail="Invalid signature")
+
+    if x_github_delivery and store.is_processed(x_github_delivery):
+        return {"status": "Already processed."}
 
     try:
         data = await request.json()
@@ -163,7 +147,9 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks, x_
                 
             print(f"\n[Aegis - CI/CD] 🚨 GitHub PR #{pr_number} Updated. Queuing Async Analysis...")
             
-            # Dispatch background task so we don't block the GitHub Webhook response
+            if x_github_delivery:
+                store.mark_processed(x_github_delivery)
+            
             background_tasks.add_task(process_pr_async, repo_full_name, pr_number)
                 
             return {"status": f"Aegis Pipeline Queued for PR #{pr_number}"}
