@@ -9,8 +9,9 @@ import hashlib
 from dotenv import load_dotenv
 
 # Local imports
-from sast_scanner import run_semgrep
-from github_utils import clone_pr_branch, post_pr_comment, apply_patch
+from sast_scanner import run_semgrep, SASTFailedError
+from github_utils import clone_pr_branch, post_pr_comment, apply_patch, get_pr_changed_files
+from repository_scanner import RepositoryScanner
 from idempotency import store
 
 load_dotenv()
@@ -58,13 +59,35 @@ def process_pr_async(repo_full_name: str, pr_number: int):
         shutil.rmtree(temp_dir, ignore_errors=True)
         return
 
-    vulnerable_files = run_semgrep(temp_dir)
+    changed_files = get_pr_changed_files(repo_full_name, pr_number)
+    scanner = RepositoryScanner(temp_dir)
+    targets = scanner.get_scan_targets(changed_files)
     
+    if not targets:
+        print("[Aegis - CI/CD] No relevant scan targets identified. Pipeline stopping.")
+        post_pr_comment(repo_full_name, pr_number, "🛡️ **Aegis God-Mode Analysis:** No actionable files modified in this PR. Skipping scan.")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return
+
+    try:
+        vulnerable_files = run_semgrep(targets)
+    except SASTFailedError as e:
+        print(f"[Aegis - CI/CD] SAST_FAILED: {e}")
+        post_pr_comment(repo_full_name, pr_number, f"⚠️ **Aegis God-Mode Analysis:** SAST pre-filter failed (Status: `SAST_FAILED`). For safety, Aegis has aborted the scan rather than blindly analyzing the repository.\n\nError: {e}")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return
+        
     if not vulnerable_files:
         print("[Aegis - CI/CD] No potential vulnerabilities found by SAST. Aegis pipeline stopping.")
         post_pr_comment(repo_full_name, pr_number, "🛡️ **Aegis God-Mode Analysis:** No vulnerabilities detected during SAST pre-scan. Code appears secure.")
         shutil.rmtree(temp_dir, ignore_errors=True)
         return
+
+    budgets = scanner.budgets
+    max_vulns = budgets.get("max_vulnerabilities", 5)
+    if len(vulnerable_files) > max_vulns:
+        print(f"[Aegis - CI/CD] WARNING: Semgrep found {len(vulnerable_files)} vulnerable files, which exceeds the max_vulnerabilities budget ({max_vulns}). Truncating.")
+        vulnerable_files = list(vulnerable_files)[:max_vulns]
 
     fixed_files = []
     

@@ -23,7 +23,8 @@ def generate_exploit(target_code_path: str, output_exploit_path: str, previous_e
         print(f"[Aegis - Red Team Agent] Could not read target code: {e}")
         return False, "TARGET_READ_ERROR"
 
-    enterprise_context = load_codebase_context(target_code_path=target_code_path)
+    repo_directory = os.path.dirname(os.path.abspath(target_code_path))
+    enterprise_context = load_codebase_context(target_code_path, repo_directory)
 
     ext = os.path.splitext(target_code_path)[1].lower()
     if ext in ['.js', '.ts']:

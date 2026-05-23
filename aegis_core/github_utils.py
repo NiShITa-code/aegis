@@ -65,6 +65,20 @@ def clone_pr_branch(repo_full_name: str, pr_number: int, target_dir: str) -> boo
         print(f"[Aegis - GitHub] Error cloning PR: {e}")
         return False
 
+def get_pr_changed_files(repo_full_name: str, pr_number: int) -> list:
+    """
+    Retrieves the list of filenames changed in the PR.
+    """
+    try:
+        g = get_github_client(repo_full_name)
+        repo = g.get_repo(repo_full_name)
+        pr = repo.get_pull(pr_number)
+        files = pr.get_files()
+        return [f.filename for f in files]
+    except Exception as e:
+        print(f"[Aegis - GitHub] Error fetching PR changed files: {e}")
+        return []
+
 def post_pr_comment(repo_full_name: str, pr_number: int, body: str):
     """
     Posts a review comment on the PR.

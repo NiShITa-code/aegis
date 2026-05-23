@@ -7,7 +7,7 @@ from agent_red import generate_exploit
 from agent_blue import generate_fix
 from sandbox import run_exploit_against_target
 from security_utils import validate_safe_path, SecurityUtilsError
-from config import get_functional_test_command
+from config import get_functional_test_command, get_aegis_budgets
 from dotenv import load_dotenv
 import time
 from datetime import datetime
@@ -26,6 +26,9 @@ STATUS_PARTIALLY_VERIFIED = "SECURITY_VERIFIED_BUT_FUNCTIONALLY_UNVERIFIED"
 STATUS_SECURED = "SECURED"
 STATUS_DUPLICATE = "DUPLICATE_FINDING"
 STATUS_NO_VULNERABILITY = "NO_VULNERABILITY"
+STATUS_SCAN_TOO_LARGE = "SCAN_TOO_LARGE"
+STATUS_SAST_FAILED = "SAST_FAILED"
+STATUS_NO_RELEVANT_CONTEXT = "NO_RELEVANT_CONTEXT"
 
 def create_validation_exploit(original_exploit_path: str, original_target: str, new_target: str) -> str:
     validation_exploit_path = "generated_exploit_validation.py"
@@ -74,6 +77,12 @@ def run_aegis_pipeline(target_file: str):
         print(f"❌ {STATUS_UNSAFE_PATH}: {e}")
         sys.exit(1)
         
+    budgets = get_aegis_budgets(cwd)
+    if os.path.exists(target_file) and os.path.getsize(target_file) > budgets.get("max_file_bytes", 500 * 1024):
+        print(f"❌ {STATUS_SCAN_TOO_LARGE}: Target file {target_file} exceeds max file size budget.")
+        sys.exit(1)
+
+        
     print(f"Targeting Codebase: {target_file}")
     
     temp_exploit_file = "generated_exploit.py"
@@ -84,8 +93,16 @@ def run_aegis_pipeline(target_file: str):
     red_previous_error = None
     vulnerability_found = False
     
+    max_llm_calls = budgets.get("max_llm_calls", 20)
+    current_llm_calls = 0
+    
     while red_attempt < max_red_retries:
         red_attempt += 1
+        current_llm_calls += 1
+        if current_llm_calls > max_llm_calls:
+            print(f"❌ {STATUS_RATE_LIMIT}: Max LLM calls budget exhausted.")
+            sys.exit(1)
+            
         print(f"\n--- PHASE 1: RED TEAM ATTACK (Attempt {red_attempt}/{max_red_retries}) ---")
         success, result = generate_exploit(target_file, temp_exploit_file, red_previous_error)
         
@@ -121,6 +138,11 @@ def run_aegis_pipeline(target_file: str):
     
     while attempt < max_retries:
         attempt += 1
+        current_llm_calls += 1
+        if current_llm_calls > max_llm_calls:
+            print(f"❌ {STATUS_RATE_LIMIT}: Max LLM calls budget exhausted.")
+            sys.exit(1)
+            
         print(f"\n--- PHASE 3: BLUE TEAM REMEDIATION (Attempt {attempt}/{max_retries}) ---")
         
         success, result = generate_fix(target_file, temp_exploit_file, fixed_app_file, previous_error)
